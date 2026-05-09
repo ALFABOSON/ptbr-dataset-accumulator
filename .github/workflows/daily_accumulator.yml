@@ -1,0 +1,35 @@
+name: Daily PT-BR Content Accumulator
+
+on:
+  schedule:
+    # Roda todo dia às 06:00 BRT (09:00 UTC)
+    - cron: '0 9 * * *'
+  workflow_dispatch:  # Permite rodar manualmente também
+
+jobs:
+  accumulate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Run Accumulator
+      run: |
+        python acumulador_ptbr_dataset.py
+      env:
+        # Para versão com Service Account (futuro)
+        GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+    - name: Upload artifacts (optional)
+      uses: actions/upload-artifact@v4
+      with:
+        name: daily-report
+        path: reports/
