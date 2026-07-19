@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Brinquedo sensorial em 2 peças com rosca (inspirado em coluna espiral + tampa flor).
+Brinquedo sensorial modular: UMA peça única, impressa 2x (ou mais).
 
-Peça 1 (base):  coluna espiralada (perfil estrela torcido) com pino roscado no topo.
-Peça 2 (tampa): disco em formato de flor com furo roscado embaixo.
+Cada peça é idêntica: base em formato de flor (com rosca fêmea escondida
+embaixo) + coluna espiralada + pino roscado no topo. Uma cópia enrosca em
+cima da outra — sem cara de porca e parafuso: montado vira um totem
+flor/espiral/flor/espiral, e o pino da peça de cima fica como o pino do
+brinquedo original. Dá para encadear quantas peças quiser.
 
-As duas peças se enroscam (rosca senoidal, passo 5.5 mm, folga radial 0.45 mm).
+Gera STL binário usando apenas a biblioteca padrão do Python (sem numpy),
+além de uma imagem PNG de pré-visualização.
 
-Gera STL binário usando apenas a biblioteca padrão do Python (sem numpy).
-Também gera uma imagem PNG de pré-visualização.
-
-Impressão (FDM, sem suportes):
-  - base:  em pé, como gerada
-  - tampa: de cabeça para baixo (topo plano na mesa, furo da rosca para cima)
-    -> o STL da tampa já é exportado nessa orientação de impressão.
+Impressão (FDM): em pé, como gerada, sem suportes — o teto interno da
+rosca fêmea é um cone de 45 graus, autoportante.
 """
 
 import math
@@ -27,29 +26,30 @@ N = 96  # segmentos angulares
 TAU = 2 * math.pi
 
 # ---------------- parâmetros ----------------
-# coluna (base)
-COL_H = 60.0        # altura da coluna
-COL_R = 14.0        # raio médio
-COL_A = 3.5         # amplitude dos gomos
+# flor (base da peça)
+FLW_T = 13.0        # espessura da flor
+FLW_R = 18.0        # raio médio das pétalas
+FLW_A = 4.0         # amplitude das pétalas
+FLW_K = 8           # número de pétalas
+FLW_RIP = 0.45      # ondulação horizontal na lateral (textura sensorial)
+FLW_RIP_P = 4.0     # período da ondulação
+
+# coluna espiralada
+COL_TOP = 43.0      # topo da coluna (altura da peça sem o pino)
+COL_R = 11.0        # raio médio
+COL_A = 2.5         # amplitude dos gomos
 COL_K = 6           # número de gomos
-COL_TWIST = math.radians(150)  # torção total
+COL_TWIST = math.radians(120)  # torção total
 
-# rosca
-PITCH = 5.5         # passo
-AMP = 1.3           # amplitude (profundidade do filete = 2*AMP)
-R_STUD = 7.0        # raio médio do pino roscado (macho)
+# rosca (senoidal — imprime bem e enrosca macio)
+PITCH = 5.0         # passo
+AMP = 1.25          # amplitude (profundidade do filete = 2*AMP)
+R_STUD = 6.5        # raio médio do pino (macho)
 CLEAR = 0.45        # folga radial da rosca fêmea
-STUD_Z0 = COL_H - 3.0   # pino começa 3 mm dentro da coluna (união por sobreposição)
-STUD_Z1 = COL_H + 11.0  # ponta do pino
-
-# tampa (flor)
-CAP_T = 16.0        # espessura
-CAP_R = 17.0        # raio médio das pétalas
-CAP_A = 4.0         # amplitude das pétalas
-CAP_K = 8           # número de pétalas
-CAP_RIP = 0.45      # ondulação horizontal na lateral (textura sensorial)
-CAP_RIP_P = 4.0     # período da ondulação
-HOLE_D = 12.5       # profundidade do furo roscado
+STUD_Z0 = COL_TOP - 3.0   # pino começa 3 mm dentro da coluna
+STUD_Z1 = COL_TOP + 10.0  # ponta do pino (10 mm expostos = 2 voltas)
+HOLE_D = 11.0       # profundidade roscada do furo (na base da flor)
+CONE_TIP = 0.5      # raio no ápice do teto cônico do furo
 
 
 def add_quad(tris, a, b, c, d):
@@ -66,34 +66,42 @@ def make_ring(rfun, z):
     return pts
 
 
-def tube(tris, rfun, z0, z1, steps, cap_bottom=True, cap_top=True):
-    """Superfície de revolução generalizada r(phi, z), fechada com tampas em leque."""
-    rings = [make_ring(rfun, z0 + (z1 - z0) * j / steps) for j in range(steps + 1)]
-    for j in range(steps):
+def wall(tris, rings, invert=False):
+    """Faixa de quads entre anéis consecutivos. invert=True para superfícies internas."""
+    for j in range(len(rings) - 1):
         lo, hi = rings[j], rings[j + 1]
         for i in range(N):
             i2 = (i + 1) % N
-            add_quad(tris, lo[i], lo[i2], hi[i2], hi[i])
-    if cap_bottom:
-        c = (0.0, 0.0, z0)
-        ring0 = rings[0]
-        for i in range(N):
-            tris.append((c, ring0[(i + 1) % N], ring0[i]))
-    if cap_top:
-        c = (0.0, 0.0, z1)
-        ringt = rings[-1]
-        for i in range(N):
-            tris.append((c, ringt[i], ringt[(i + 1) % N]))
-    return rings
+            if invert:
+                add_quad(tris, lo[i], hi[i], hi[i2], lo[i2])
+            else:
+                add_quad(tris, lo[i], lo[i2], hi[i2], hi[i])
+
+
+def fan_up(tris, ring, z):
+    c = (0.0, 0.0, z)
+    for i in range(N):
+        tris.append((c, ring[i], ring[(i + 1) % N]))
+
+
+def fan_down(tris, ring, z):
+    c = (0.0, 0.0, z)
+    for i in range(N):
+        tris.append((c, ring[(i + 1) % N], ring[i]))
 
 
 # ---------------- perfis ----------------
+def r_flor(phi, z):
+    return FLW_R + FLW_A * math.cos(FLW_K * phi) + FLW_RIP * math.cos(TAU * z / FLW_RIP_P)
+
+
 def r_coluna(phi, z):
-    return COL_R + COL_A * math.cos(COL_K * (phi + COL_TWIST * z / COL_H))
+    frac = (z - FLW_T) / (COL_TOP - FLW_T)
+    return COL_R + COL_A * math.cos(COL_K * (phi + COL_TWIST * frac))
 
 
 def r_pino(phi, z):
-    # rosca macho senoidal; ponta com alívio (lead-in) nos últimos 2 mm
+    # rosca macho; ponta com alívio (lead-in) nos últimos 2 mm
     t = min(1.0, max(0.0, (STUD_Z1 - z) / 2.0))
     c = math.cos(TAU * z / PITCH - phi)
     return R_STUD + AMP * (t * c - (1.0 - t))
@@ -106,75 +114,59 @@ def r_furo(phi, z):
     return (R_STUD + CLEAR) + AMP * (t * c + (1.0 - t))
 
 
-def r_flor(phi, z):
-    return CAP_R + CAP_A * math.cos(CAP_K * phi) + CAP_RIP * math.cos(TAU * z / CAP_RIP_P)
-
-
-# ---------------- peça 1: base ----------------
-def build_base():
+# ---------------- peça ----------------
+def build_peca():
     tris = []
-    tube(tris, r_coluna, 0.0, COL_H, 60)
-    tube(tris, r_pino, STUD_Z0, STUD_Z1, 40)  # sólido sobreposto (fatiador une)
-    return tris
 
+    # --- corpo (flor + coluna, com furo roscado embaixo) ---
+    rings = []
+    steps_f = 26
+    for j in range(steps_f + 1):                       # lateral da flor
+        z = FLW_T * j / steps_f
+        rings.append(make_ring(r_flor, z))
+    steps_c = 30
+    for j in range(steps_c + 1):                       # ombro + coluna
+        z = FLW_T + (COL_TOP - FLW_T) * j / steps_c
+        rings.append(make_ring(r_coluna, z))
+    wall(tris, rings)
+    fan_up(tris, rings[-1], COL_TOP)                   # topo da coluna
 
-# ---------------- peça 2: tampa ----------------
-def build_tampa():
-    """Na orientação de USO: topo plano em z=CAP_T, furo roscado abrindo para baixo (z=0)."""
-    tris = []
-    # furo é medido a partir da face inferior (z=0) para cima
-    def r_furo_local(phi, z):
-        return r_furo(phi, z)
-
-    # parede externa da flor
-    steps = 32
-    rings = [make_ring(r_flor, CAP_T * j / steps) for j in range(steps + 1)]
-    for j in range(steps):
-        lo, hi = rings[j], rings[j + 1]
-        for i in range(N):
-            i2 = (i + 1) % N
-            add_quad(tris, lo[i], lo[i2], hi[i2], hi[i])
-    # topo: disco cheio (leque, normal +z)
-    c = (0.0, 0.0, CAP_T)
-    top = rings[-1]
-    for i in range(N):
-        tris.append((c, top[i], top[(i + 1) % N]))
-    # parede do furo (normais para dentro)
+    # furo roscado (abre para baixo, na base da flor)
     hsteps = 32
-    hrings = [make_ring(r_furo_local, HOLE_D * j / hsteps) for j in range(hsteps + 1)]
-    for j in range(hsteps):
-        lo, hi = hrings[j], hrings[j + 1]
-        for i in range(N):
-            i2 = (i + 1) % N
-            add_quad(tris, lo[i], hi[i], hi[i2], lo[i2])
-    # teto do furo (normal -z)
-    c = (0.0, 0.0, HOLE_D)
-    ceil = hrings[-1]
-    for i in range(N):
-        tris.append((c, ceil[(i + 1) % N], ceil[i]))
-    # fundo: anel entre perfil da flor e boca do furo (normal -z)
+    hrings = [make_ring(r_furo, HOLE_D * j / hsteps) for j in range(hsteps + 1)]
+    # teto cônico a 45 graus (autoportante na impressão)
+    cone_h = (R_STUD + CLEAR + AMP) - CONE_TIP
+    csteps = 16
+    crings = []
+    for j in range(csteps + 1):
+        f = j / csteps
+        z = HOLE_D + cone_h * f
+        crings.append(make_ring(
+            lambda phi, zz, f=f: r_furo(phi, HOLE_D) * (1.0 - f) + CONE_TIP * f, z))
+    wall(tris, hrings + crings[1:], invert=True)
+    fan_down(tris, crings[-1], HOLE_D + cone_h)        # ápice do cone (face interna)
+
+    # fundo: anel entre o perfil da flor e a boca do furo
     outer0, hole0 = rings[0], hrings[0]
     for i in range(N):
         i2 = (i + 1) % N
         tris.append((outer0[i], hole0[i], hole0[i2]))
         tris.append((outer0[i], hole0[i2], outer0[i2]))
-    return tris
+
+    # --- pino roscado no topo (sólido sobreposto; o fatiador une) ---
+    pino = []
+    psteps = 40
+    prings = [make_ring(r_pino, STUD_Z0 + (STUD_Z1 - STUD_Z0) * j / psteps)
+              for j in range(psteps + 1)]
+    wall(pino, prings)
+    fan_down(pino, prings[0], STUD_Z0)
+    fan_up(pino, prings[-1], STUD_Z1)
+    return tris, pino
 
 
 # ---------------- utilidades de malha ----------------
 def transform(tris, fn):
     return [tuple(fn(v) for v in t) for t in tris]
-
-
-def flip_z(tris, height):
-    """Vira a peça de cabeça para baixo (para orientação de impressão)."""
-    out = []
-    for a, b, c in tris:
-        a2 = (a[0], -a[1], height - a[2])
-        b2 = (b[0], -b[1], height - b[2])
-        c2 = (c[0], -c[1], height - c[2])
-        out.append((a2, b2, c2))
-    return out
 
 
 def normal(t):
@@ -203,7 +195,10 @@ def check_manifold(tris):
     for t in tris:
         k = [key(p) for p in t]
         for i in range(3):
-            e = (k[i], k[(i + 1) % 3])
+            a, b = k[i], k[(i + 1) % 3]
+            if a == b:
+                continue  # aresta degenerada (ápice de cone), inofensiva
+            e = (a, b)
             edges[e] = edges.get(e, 0) + 1
     bad = 0
     for (a, b), n in edges.items():
@@ -214,7 +209,7 @@ def check_manifold(tris):
 
 def write_stl(path, tris):
     with open(path, "wb") as f:
-        f.write(b"brinquedo sensorial - gerado por script".ljust(80, b" "))
+        f.write(b"brinquedo sensorial modular - peca identica".ljust(80, b" "))
         f.write(struct.pack("<I", len(tris)))
         for t in tris:
             n = normal(t)
@@ -225,9 +220,9 @@ def write_stl(path, tris):
 
 
 # ---------------- render de pré-visualização (PNG) ----------------
-def render(scene, path, W=900, H=560):
+def render(scene, path, W=900, H=620):
     """scene: lista de (tris, cor). Projeção ortográfica isométrica, pintor."""
-    yaw, elev = math.radians(35), math.radians(28)
+    yaw, elev = math.radians(35), math.radians(24)
     cy_, sy_ = math.cos(yaw), math.sin(yaw)
     ce, se = math.cos(elev), math.sin(elev)
     lx, ly, lz = 0.4, -0.6, 0.7
@@ -237,10 +232,7 @@ def render(scene, path, W=900, H=560):
     def proj(p):
         x1 = p[0] * cy_ - p[1] * sy_
         y1 = p[0] * sy_ + p[1] * cy_
-        sx = x1
-        sy2 = p[2] * ce - y1 * se
-        depth = y1 * ce + p[2] * se
-        return sx, sy2, depth
+        return x1, p[2] * ce - y1 * se, y1 * ce + p[2] * se
 
     pts = [proj(v) for tris, _ in scene for t in tris for v in t]
     xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
@@ -256,7 +248,6 @@ def render(scene, path, W=900, H=560):
             p = [proj(v) for v in t]
             d = (p[0][2] + p[1][2] + p[2][2]) / 3.0
             n = normal(t)
-            # normal no espaço da câmera para sombreamento simples
             shade = 0.35 + 0.65 * max(0.0, n[0] * lx + n[1] * ly + n[2] * lz)
             col = tuple(min(255, int(c * shade)) for c in color)
             items.append((d, [to_px(q[0], q[1]) for q in p], col))
@@ -293,27 +284,22 @@ def render(scene, path, W=900, H=560):
 
 # ---------------- main ----------------
 def main():
-    base = build_base()
-    tampa_uso = build_tampa()
+    corpo, pino = build_peca()
+    peca = corpo + pino
+    print("peca: %d tris | corpo: vol %.1f cm3, arestas ruins %d | pino: vol %.1f cm3, arestas ruins %d"
+          % (len(peca), volume(corpo) / 1000.0, check_manifold(corpo),
+             volume(pino) / 1000.0, check_manifold(pino)))
 
-    print("base:  %d tris, volume %.1f cm3" % (len(base), volume(base) / 1000.0))
-    print("tampa: %d tris, volume %.1f cm3, arestas ruins: %d"
-          % (len(tampa_uso), volume(tampa_uso) / 1000.0, check_manifold(tampa_uso)))
-
-    # tampa exportada já na orientação de impressão (topo plano na mesa, rosca p/ cima)
-    tampa_print = flip_z(tampa_uso, CAP_T)
-    write_stl(os.path.join(OUT, "peca1_base_espiral.stl"), base)
-    write_stl(os.path.join(OUT, "peca2_tampa_flor.stl"), tampa_print)
+    write_stl(os.path.join(OUT, "peca_identica_imprimir_2x.stl"), peca)
 
     verde, amarelo = (46, 155, 95), (240, 185, 30)
-    dx = 52.0
-    tampa_solta = transform(tampa_print, lambda v: (v[0] + dx, v[1], v[2]))
-    tampa_montada = transform(tampa_uso, lambda v: (v[0] - dx - 12, v[1], v[2] + COL_H))
-    base_montada = transform(base, lambda v: (v[0] - dx - 12, v[1], v[2]))
-    render([(base, verde), (tampa_solta, amarelo),
-            (base_montada, verde), (tampa_montada, amarelo)],
+    p1 = transform(peca, lambda v: (v[0] - 62, v[1], v[2]))
+    p2 = transform(peca, lambda v: (v[0] - 8, v[1], v[2]))
+    base = transform(peca, lambda v: (v[0] + 58, v[1], v[2]))
+    topo = transform(peca, lambda v: (v[0] + 58, v[1], v[2] + COL_TOP))
+    render([(p1, verde), (p2, amarelo), (base, verde), (topo, amarelo)],
            os.path.join(OUT, "preview.png"))
-    print("STLs e preview gerados em", OUT)
+    print("STL e preview gerados em", OUT)
 
 
 if __name__ == "__main__":
