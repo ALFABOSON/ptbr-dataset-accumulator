@@ -30,28 +30,28 @@ OUT = os.path.dirname(os.path.abspath(__file__))
 TAU = 2 * math.pi
 
 # ---------------- parâmetros ----------------
-# Versão mini: dimensionada para ~6 g de filamento no TOTAL (2 cópias em PLA)
+# Dimensionada para até 6 g de filamento POR CÓPIA (PLA)
 K = 4                    # aletas por peça (montado: 8 intercaladas)
 GAP_MM = 0.35            # folga entre aletas das duas cópias, no raio interno
-BASE_H = 4.7             # altura da base
+BASE_H = 5.8             # altura da base
 FIN_Z0 = BASE_H          # onde as aletas começam (topo da base)
-FIN_LEN = 20.5           # comprimento da zona das aletas
+FIN_LEN = 25.5           # comprimento da zona das aletas
 SEAT = FIN_Z0 + FIN_LEN  # onde a base da cópia oposta assenta
 FIN_Z1 = SEAT - 0.25     # ponta das aletas (0,25 mm antes da base oposta)
 FIN_ROOT = FIN_Z0 - 2.0  # raiz enterrada 2 mm na base (união no fatiador)
 ASSY_H = SEAT + BASE_H   # altura total montado
 TWIST = math.radians(300)    # giro total das aletas (o "aperto" da rosca)
 OMEGA = TWIST / FIN_LEN  # rad/mm
-R_IN = 3.4               # raio interno das aletas (miolo vazado)
-R_OUT_MIN = 7.0          # raio externo nas pontas
-R_OUT_BULGE = 2.3        # barriga do fuso no meio
-TIP_TAPER_L = 3.5        # afinamento angular na ponta (entrada fácil)
-TIP_ROUND_L = 1.2        # arredondamento radial na ponta
+R_IN = 4.2               # raio interno das aletas (miolo vazado)
+R_OUT_MIN = 8.7          # raio externo nas pontas
+R_OUT_BULGE = 2.9        # barriga do fuso no meio
+TIP_TAPER_L = 4.3        # afinamento angular na ponta (entrada fácil)
+TIP_ROUND_L = 1.5        # arredondamento radial na ponta
 FIN_W = TAU / (2 * K) - GAP_MM / R_IN  # largura angular da aleta
 
 # base flangeada
-BASE_R0 = 9.5            # raio no chão
-BASE_R1 = 7.6            # raio no ombro (cobre a raiz das aletas)
+BASE_R0 = 11.8           # raio no chão
+BASE_R1 = 9.4            # raio no ombro (cobre a raiz das aletas)
 BASE_FLUTE = 0.5         # sulcos espirais decorativos na base
 
 # estimativa de peso (PLA)
@@ -315,11 +315,11 @@ def main():
     assert gap * R_IN > 0.25, "folga insuficiente entre as aletas!"
 
     g_peca = PLA_G_CM3 * (FRAC_BASE * vol_base + FRAC_FIN * vol_fins) / 1000.0
-    print("filamento estimado (PLA): %.1f g por peca, %.1f g nas duas copias"
-          % (g_peca, 2 * g_peca))
-    assert 2 * g_peca <= 6.0, "estouro do limite de 6 g de filamento!"
+    print("filamento estimado (PLA): %.1f g por copia (limite: 6 g cada)"
+          % g_peca)
+    assert g_peca <= 6.0, "estouro do limite de 6 g de filamento por copia!"
 
-    write_stl(os.path.join(OUT, "peca_vortice_mini_6g.stl"), peca)
+    write_stl(os.path.join(OUT, "peca_vortice_6g_cada.stl"), peca)
 
     # montagem: virar a copia (rotacao propria, mantem o sentido da helice)
     # e girar 75 graus para intercalar as aletas
