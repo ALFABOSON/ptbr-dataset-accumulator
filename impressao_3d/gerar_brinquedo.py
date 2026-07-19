@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Brinquedo sensorial modular: UMA peça única, impressa 2x (ou mais).
+Brinquedo sensorial "vórtice": UMA peça única, impressa 2x.
 
-Cada peça é idêntica: base em formato de flor (com rosca fêmea escondida
-embaixo) + coluna espiralada + pino roscado no topo. Uma cópia enrosca em
-cima da outra — sem cara de porca e parafuso: montado vira um totem
-flor/espiral/flor/espiral, e o pino da peça de cima fica como o pino do
-brinquedo original. Dá para encadear quantas peças quiser.
+Cada peça = base flangeada + 4 aletas helicoidais livres em volta de um
+centro vazado. As DUAS CÓPIAS IDÊNTICAS se enroscam uma na outra: as
+aletas de uma giram para dentro dos vãos da outra (300 graus de giro até
+assentar). Montado, forma um fuso espiral contínuo de 8 aletas
+intercaladas — a "rosca" é a própria escultura, nada de porca e parafuso.
+
+Funciona porque virar a peça de cabeça para baixo (rotação no espaço) NÃO
+inverte o sentido da hélice — as aletas da cópia virada descem exatamente
+pelos vãos helicoidais da outra.
 
 Gera STL binário usando apenas a biblioteca padrão do Python (sem numpy),
 além de uma imagem PNG de pré-visualização.
 
-Impressão (FDM): em pé, como gerada, sem suportes — o teto interno da
-rosca fêmea é um cone de 45 graus, autoportante.
+Impressão (FDM): em pé, como gerada, sem suportes. O giro das aletas
+desloca cada camada ~0,4 mm — dentro do que imprime bem com aletas de
+5+ mm de espessura.
 """
 
 import math
@@ -22,149 +27,143 @@ import zlib
 import os
 
 OUT = os.path.dirname(os.path.abspath(__file__))
-N = 96  # segmentos angulares
 TAU = 2 * math.pi
 
 # ---------------- parâmetros ----------------
-# flor (base da peça)
-FLW_T = 13.0        # espessura da flor
-FLW_R = 18.0        # raio médio das pétalas
-FLW_A = 4.0         # amplitude das pétalas
-FLW_K = 8           # número de pétalas
-FLW_RIP = 0.45      # ondulação horizontal na lateral (textura sensorial)
-FLW_RIP_P = 4.0     # período da ondulação
+K = 4                    # aletas por peça (montado: 8 intercaladas)
+FIN_W = math.radians(43.5)   # largura angular da aleta (vão = 46,5 graus)
+FIN_Z0 = 10.0            # onde as aletas começam (topo da base)
+FIN_Z1 = 54.7            # ponta das aletas (0,3 mm antes da base oposta)
+FIN_ROOT = 7.0           # raiz enterrada 3 mm na base (união no fatiador)
+ASSY_H = 65.0            # altura total montado (base 10 + aletas 45 + base 10)
+TWIST = math.radians(300)    # giro total das aletas (o "aperto" da rosca)
+OMEGA = TWIST / (55.0 - FIN_Z0)  # rad/mm
+R_IN = 7.0               # raio interno das aletas (miolo vazado de 14 mm)
+R_OUT_MIN = 14.0         # raio externo nas pontas
+R_OUT_BULGE = 5.0        # barriga do fuso no meio (raio externo vai a 19)
+TIP_TAPER_L = 5.0        # afinamento angular na ponta (entrada fácil)
+TIP_ROUND_L = 2.0        # arredondamento radial na ponta
 
-# coluna espiralada
-COL_TOP = 43.0      # topo da coluna (altura da peça sem o pino)
-COL_R = 11.0        # raio médio
-COL_A = 2.5         # amplitude dos gomos
-COL_K = 6           # número de gomos
-COL_TWIST = math.radians(120)  # torção total
+# base flangeada
+BASE_H = 10.0            # altura da base
+BASE_R0 = 20.0           # raio no chão
+BASE_R1 = 15.0           # raio no ombro (cobre a raiz das aletas)
+BASE_FLUTE = 0.8         # sulcos espirais decorativos na base
 
-# rosca (senoidal — imprime bem e enrosca macio)
-PITCH = 5.0         # passo
-AMP = 1.25          # amplitude (profundidade do filete = 2*AMP)
-R_STUD = 6.5        # raio médio do pino (macho)
-CLEAR = 0.45        # folga radial da rosca fêmea
-STUD_Z0 = COL_TOP - 3.0   # pino começa 3 mm dentro da coluna
-STUD_Z1 = COL_TOP + 10.0  # ponta do pino (10 mm expostos = 2 voltas)
-HOLE_D = 11.0       # profundidade roscada do furo (na base da flor)
-CONE_TIP = 0.5      # raio no ápice do teto cônico do furo
+NSEG = 96                # segmentos angulares (superfícies de revolução)
 
 
+# ---------------- perfis das aletas ----------------
+def fin_width(z):
+    """Largura angular; afina perto da ponta para facilitar a entrada."""
+    t = min(1.0, max(0.0, (FIN_Z1 - z) / TIP_TAPER_L))
+    return FIN_W * (0.5 + 0.5 * t)
+
+
+def r_out(z):
+    """Raio externo: barriga suave (fuso)."""
+    s = min(1.0, max(0.0, (z - FIN_Z0) / (55.0 - FIN_Z0)))
+    r = R_OUT_MIN + R_OUT_BULGE * math.sin(math.pi * s)
+    t = min(1.0, max(0.0, (FIN_Z1 - z) / TIP_ROUND_L))
+    return r - 1.5 * (1.0 - t)
+
+
+def fin_center(i, z):
+    return i * TAU / K + OMEGA * (z - FIN_Z0)
+
+
+# ---------------- construção de malha ----------------
 def add_quad(tris, a, b, c, d):
     tris.append((a, b, c))
     tris.append((a, c, d))
 
 
-def make_ring(rfun, z):
+def polygon_ring(i, z):
+    """Seção transversal da aleta i na altura z: setor anular, CCW."""
+    c = fin_center(i, z)
+    w = fin_width(z)
+    a, b = c - w / 2.0, c + w / 2.0
+    ro, ri = r_out(z), R_IN
     pts = []
-    for i in range(N):
-        phi = TAU * i / N
-        r = rfun(phi, z)
-        pts.append((r * math.cos(phi), r * math.sin(phi), z))
+    OA, IA, RE = 8, 6, 2  # subdivisões: arco externo, interno, bordas radiais
+    for j in range(OA + 1):                      # arco externo, a -> b
+        t = a + (b - a) * j / OA
+        pts.append((ro * math.cos(t), ro * math.sin(t), z))
+    for j in range(1, RE + 1):                   # borda radial em b, ro -> ri
+        r = ro + (ri - ro) * j / RE
+        pts.append((r * math.cos(b), r * math.sin(b), z))
+    for j in range(1, IA + 1):                   # arco interno, b -> a
+        t = b + (a - b) * j / IA
+        pts.append((ri * math.cos(t), ri * math.sin(t), z))
+    for j in range(1, RE):                       # borda radial em a, ri -> ro
+        r = ri + (ro - ri) * j / RE
+        pts.append((r * math.cos(a), r * math.sin(a), z))
     return pts
 
 
-def wall(tris, rings, invert=False):
-    """Faixa de quads entre anéis consecutivos. invert=True para superfícies internas."""
-    for j in range(len(rings) - 1):
-        lo, hi = rings[j], rings[j + 1]
-        for i in range(N):
-            i2 = (i + 1) % N
-            if invert:
-                add_quad(tris, lo[i], hi[i], hi[i2], lo[i2])
-            else:
-                add_quad(tris, lo[i], lo[i2], hi[i2], hi[i])
+def centroid(ring):
+    n = len(ring)
+    return (sum(p[0] for p in ring) / n, sum(p[1] for p in ring) / n, ring[0][2])
 
 
-def fan_up(tris, ring, z):
-    c = (0.0, 0.0, z)
-    for i in range(N):
-        tris.append((c, ring[i], ring[(i + 1) % N]))
-
-
-def fan_down(tris, ring, z):
-    c = (0.0, 0.0, z)
-    for i in range(N):
-        tris.append((c, ring[(i + 1) % N], ring[i]))
-
-
-# ---------------- perfis ----------------
-def r_flor(phi, z):
-    return FLW_R + FLW_A * math.cos(FLW_K * phi) + FLW_RIP * math.cos(TAU * z / FLW_RIP_P)
-
-
-def r_coluna(phi, z):
-    frac = (z - FLW_T) / (COL_TOP - FLW_T)
-    return COL_R + COL_A * math.cos(COL_K * (phi + COL_TWIST * frac))
-
-
-def r_pino(phi, z):
-    # rosca macho; ponta com alívio (lead-in) nos últimos 2 mm
-    t = min(1.0, max(0.0, (STUD_Z1 - z) / 2.0))
-    c = math.cos(TAU * z / PITCH - phi)
-    return R_STUD + AMP * (t * c - (1.0 - t))
-
-
-def r_furo(phi, z):
-    # rosca fêmea: mesmo passo/fase, raio médio maior (folga); entrada aliviada
-    t = min(1.0, max(0.0, z / 2.0))
-    c = math.cos(TAU * z / PITCH - phi)
-    return (R_STUD + CLEAR) + AMP * (t * c + (1.0 - t))
-
-
-# ---------------- peça ----------------
-def build_peca():
+def build_fin(i):
     tris = []
+    steps = 110
+    rings = [polygon_ring(i, FIN_ROOT + (FIN_Z1 - FIN_ROOT) * j / steps)
+             for j in range(steps + 1)]
+    npts = len(rings[0])
+    for j in range(steps):
+        lo, hi = rings[j], rings[j + 1]
+        for k in range(npts):
+            k2 = (k + 1) % npts
+            add_quad(tris, lo[k], lo[k2], hi[k2], hi[k])
+    c0, c1 = centroid(rings[0]), centroid(rings[-1])
+    for k in range(npts):                        # tampa inferior (normal -z)
+        tris.append((c0, rings[0][(k + 1) % npts], rings[0][k]))
+    for k in range(npts):                        # tampa da ponta (normal +z)
+        tris.append((c1, rings[-1][k], rings[-1][(k + 1) % npts]))
+    return tris
 
-    # --- corpo (flor + coluna, com furo roscado embaixo) ---
+
+def r_base(phi, z):
+    flare = BASE_R1 + (BASE_R0 - BASE_R1) * (1.0 - z / BASE_H) ** 1.5
+    return flare + BASE_FLUTE * math.cos(2 * K * (phi + OMEGA * (z - FIN_Z0)))
+
+
+def build_base():
+    tris = []
+    steps = 20
     rings = []
-    steps_f = 26
-    for j in range(steps_f + 1):                       # lateral da flor
-        z = FLW_T * j / steps_f
-        rings.append(make_ring(r_flor, z))
-    steps_c = 30
-    for j in range(steps_c + 1):                       # ombro + coluna
-        z = FLW_T + (COL_TOP - FLW_T) * j / steps_c
-        rings.append(make_ring(r_coluna, z))
-    wall(tris, rings)
-    fan_up(tris, rings[-1], COL_TOP)                   # topo da coluna
-
-    # furo roscado (abre para baixo, na base da flor)
-    hsteps = 32
-    hrings = [make_ring(r_furo, HOLE_D * j / hsteps) for j in range(hsteps + 1)]
-    # teto cônico a 45 graus (autoportante na impressão)
-    cone_h = (R_STUD + CLEAR + AMP) - CONE_TIP
-    csteps = 16
-    crings = []
-    for j in range(csteps + 1):
-        f = j / csteps
-        z = HOLE_D + cone_h * f
-        crings.append(make_ring(
-            lambda phi, zz, f=f: r_furo(phi, HOLE_D) * (1.0 - f) + CONE_TIP * f, z))
-    wall(tris, hrings + crings[1:], invert=True)
-    fan_down(tris, crings[-1], HOLE_D + cone_h)        # ápice do cone (face interna)
-
-    # fundo: anel entre o perfil da flor e a boca do furo
-    outer0, hole0 = rings[0], hrings[0]
-    for i in range(N):
-        i2 = (i + 1) % N
-        tris.append((outer0[i], hole0[i], hole0[i2]))
-        tris.append((outer0[i], hole0[i2], outer0[i2]))
-
-    # --- pino roscado no topo (sólido sobreposto; o fatiador une) ---
-    pino = []
-    psteps = 40
-    prings = [make_ring(r_pino, STUD_Z0 + (STUD_Z1 - STUD_Z0) * j / psteps)
-              for j in range(psteps + 1)]
-    wall(pino, prings)
-    fan_down(pino, prings[0], STUD_Z0)
-    fan_up(pino, prings[-1], STUD_Z1)
-    return tris, pino
+    for j in range(steps + 1):
+        z = BASE_H * j / steps
+        ring = []
+        for i in range(NSEG):
+            phi = TAU * i / NSEG
+            r = r_base(phi, z)
+            ring.append((r * math.cos(phi), r * math.sin(phi), z))
+        rings.append(ring)
+    for j in range(steps):
+        lo, hi = rings[j], rings[j + 1]
+        for i in range(NSEG):
+            i2 = (i + 1) % NSEG
+            add_quad(tris, lo[i], lo[i2], hi[i2], hi[i])
+    c = (0.0, 0.0, 0.0)
+    for i in range(NSEG):
+        tris.append((c, rings[0][(i + 1) % NSEG], rings[0][i]))
+    c = (0.0, 0.0, BASE_H)
+    for i in range(NSEG):
+        tris.append((c, rings[-1][i], rings[-1][(i + 1) % NSEG]))
+    return tris
 
 
-# ---------------- utilidades de malha ----------------
+def build_peca():
+    shells = [build_base()]
+    for i in range(K):
+        shells.append(build_fin(i))
+    return shells
+
+
+# ---------------- utilidades ----------------
 def transform(tris, fn):
     return [tuple(fn(v) for v in t) for t in tris]
 
@@ -188,7 +187,6 @@ def volume(tris):
 
 
 def check_manifold(tris):
-    """Cada aresta orientada deve aparecer exatamente uma vez, com a oposta também."""
     edges = {}
     def key(p):
         return (round(p[0], 5), round(p[1], 5), round(p[2], 5))
@@ -197,9 +195,8 @@ def check_manifold(tris):
         for i in range(3):
             a, b = k[i], k[(i + 1) % 3]
             if a == b:
-                continue  # aresta degenerada (ápice de cone), inofensiva
-            e = (a, b)
-            edges[e] = edges.get(e, 0) + 1
+                continue
+            edges[(a, b)] = edges.get((a, b), 0) + 1
     bad = 0
     for (a, b), n in edges.items():
         if n != 1 or edges.get((b, a), 0) != 1:
@@ -207,9 +204,22 @@ def check_manifold(tris):
     return bad
 
 
+def check_clearance():
+    """Folga angular mínima entre aletas das duas cópias, ao longo da altura."""
+    worst = 1e9
+    z = FIN_Z0 + 0.5
+    while z < 55.0:
+        wa = fin_width(z)                 # aleta da peça de baixo
+        wb = fin_width(ASSY_H - z)        # aleta da cópia virada, nessa altura
+        gap = TAU / (2 * K) - wa / 2.0 - wb / 2.0
+        worst = min(worst, gap)
+        z += 0.5
+    return worst
+
+
 def write_stl(path, tris):
     with open(path, "wb") as f:
-        f.write(b"brinquedo sensorial modular - peca identica".ljust(80, b" "))
+        f.write(b"brinquedo vortice - peca identica, imprimir 2x".ljust(80, b" "))
         f.write(struct.pack("<I", len(tris)))
         for t in tris:
             n = normal(t)
@@ -220,9 +230,8 @@ def write_stl(path, tris):
 
 
 # ---------------- render de pré-visualização (PNG) ----------------
-def render(scene, path, W=900, H=620):
-    """scene: lista de (tris, cor). Projeção ortográfica isométrica, pintor."""
-    yaw, elev = math.radians(35), math.radians(24)
+def render(scene, path, W=940, H=620):
+    yaw, elev = math.radians(35), math.radians(22)
     cy_, sy_ = math.cos(yaw), math.sin(yaw)
     ce, se = math.cos(elev), math.sin(elev)
     lx, ly, lz = 0.4, -0.6, 0.7
@@ -284,20 +293,33 @@ def render(scene, path, W=900, H=620):
 
 # ---------------- main ----------------
 def main():
-    corpo, pino = build_peca()
-    peca = corpo + pino
-    print("peca: %d tris | corpo: vol %.1f cm3, arestas ruins %d | pino: vol %.1f cm3, arestas ruins %d"
-          % (len(peca), volume(corpo) / 1000.0, check_manifold(corpo),
-             volume(pino) / 1000.0, check_manifold(pino)))
+    shells = build_peca()
+    peca = [t for s in shells for t in s]
+    bad = sum(check_manifold(s) for s in shells)
+    vol = sum(volume(s) for s in shells)
+    gap = check_clearance()
+    print("peca: %d tris, volume %.1f cm3, arestas ruins %d" % (len(peca), vol / 1000.0, bad))
+    print("folga angular minima entre as copias: %.2f graus (%.2f mm no raio 16)"
+          % (math.degrees(gap), gap * 16.0))
+    assert gap > math.radians(1.0), "folga insuficiente entre as aletas!"
 
-    write_stl(os.path.join(OUT, "peca_identica_imprimir_2x.stl"), peca)
+    write_stl(os.path.join(OUT, "peca_vortice_imprimir_2x.stl"), peca)
 
-    verde, amarelo = (46, 155, 95), (240, 185, 30)
+    # montagem: virar a copia (rotacao propria, mantem o sentido da helice)
+    # e girar 75 graus para intercalar as aletas
+    delta = math.radians(75.0)
+    cd, sd = math.cos(delta), math.sin(delta)
+    def montada(v):
+        x, y = v[0] * cd - v[1] * sd, v[0] * sd + v[1] * cd
+        return (x, -y, ASSY_H - v[2])
+
+    roxo, azul = (150, 60, 160), (40, 110, 200)
     p1 = transform(peca, lambda v: (v[0] - 62, v[1], v[2]))
-    p2 = transform(peca, lambda v: (v[0] - 8, v[1], v[2]))
-    base = transform(peca, lambda v: (v[0] + 58, v[1], v[2]))
-    topo = transform(peca, lambda v: (v[0] + 58, v[1], v[2] + COL_TOP))
-    render([(p1, verde), (p2, amarelo), (base, verde), (topo, amarelo)],
+    p2 = transform(peca, lambda v: (v[0] - 5, v[1], v[2]))
+    baixo = transform(peca, lambda v: (v[0] + 58, v[1], v[2]))
+    cima = transform([tuple(montada(v) for v in t) for t in peca],
+                     lambda v: (v[0] + 58, v[1], v[2]))
+    render([(p1, roxo), (p2, azul), (baixo, roxo), (cima, azul)],
            os.path.join(OUT, "preview.png"))
     print("STL e preview gerados em", OUT)
 
