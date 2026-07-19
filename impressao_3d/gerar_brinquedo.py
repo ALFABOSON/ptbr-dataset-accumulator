@@ -30,25 +30,34 @@ OUT = os.path.dirname(os.path.abspath(__file__))
 TAU = 2 * math.pi
 
 # ---------------- parâmetros ----------------
+# Versão mini: dimensionada para ~6 g de filamento no TOTAL (2 cópias em PLA)
 K = 4                    # aletas por peça (montado: 8 intercaladas)
-FIN_W = math.radians(43.5)   # largura angular da aleta (vão = 46,5 graus)
-FIN_Z0 = 10.0            # onde as aletas começam (topo da base)
-FIN_Z1 = 54.7            # ponta das aletas (0,3 mm antes da base oposta)
-FIN_ROOT = 7.0           # raiz enterrada 3 mm na base (união no fatiador)
-ASSY_H = 65.0            # altura total montado (base 10 + aletas 45 + base 10)
+GAP_MM = 0.35            # folga entre aletas das duas cópias, no raio interno
+BASE_H = 4.7             # altura da base
+FIN_Z0 = BASE_H          # onde as aletas começam (topo da base)
+FIN_LEN = 20.5           # comprimento da zona das aletas
+SEAT = FIN_Z0 + FIN_LEN  # onde a base da cópia oposta assenta
+FIN_Z1 = SEAT - 0.25     # ponta das aletas (0,25 mm antes da base oposta)
+FIN_ROOT = FIN_Z0 - 2.0  # raiz enterrada 2 mm na base (união no fatiador)
+ASSY_H = SEAT + BASE_H   # altura total montado
 TWIST = math.radians(300)    # giro total das aletas (o "aperto" da rosca)
-OMEGA = TWIST / (55.0 - FIN_Z0)  # rad/mm
-R_IN = 7.0               # raio interno das aletas (miolo vazado de 14 mm)
-R_OUT_MIN = 14.0         # raio externo nas pontas
-R_OUT_BULGE = 5.0        # barriga do fuso no meio (raio externo vai a 19)
-TIP_TAPER_L = 5.0        # afinamento angular na ponta (entrada fácil)
-TIP_ROUND_L = 2.0        # arredondamento radial na ponta
+OMEGA = TWIST / FIN_LEN  # rad/mm
+R_IN = 3.4               # raio interno das aletas (miolo vazado)
+R_OUT_MIN = 7.0          # raio externo nas pontas
+R_OUT_BULGE = 2.3        # barriga do fuso no meio
+TIP_TAPER_L = 3.5        # afinamento angular na ponta (entrada fácil)
+TIP_ROUND_L = 1.2        # arredondamento radial na ponta
+FIN_W = TAU / (2 * K) - GAP_MM / R_IN  # largura angular da aleta
 
 # base flangeada
-BASE_H = 10.0            # altura da base
-BASE_R0 = 20.0           # raio no chão
-BASE_R1 = 15.0           # raio no ombro (cobre a raiz das aletas)
-BASE_FLUTE = 0.8         # sulcos espirais decorativos na base
+BASE_R0 = 9.5            # raio no chão
+BASE_R1 = 7.6            # raio no ombro (cobre a raiz das aletas)
+BASE_FLUTE = 0.5         # sulcos espirais decorativos na base
+
+# estimativa de peso (PLA)
+PLA_G_CM3 = 1.24
+FRAC_FIN = 0.95          # aletas finas saem quase maciças (perímetros)
+FRAC_BASE = 0.6          # base: paredes + topo/fundo + preenchimento leve
 
 NSEG = 96                # segmentos angulares (superfícies de revolução)
 
@@ -62,10 +71,10 @@ def fin_width(z):
 
 def r_out(z):
     """Raio externo: barriga suave (fuso)."""
-    s = min(1.0, max(0.0, (z - FIN_Z0) / (55.0 - FIN_Z0)))
+    s = min(1.0, max(0.0, (z - FIN_Z0) / FIN_LEN))
     r = R_OUT_MIN + R_OUT_BULGE * math.sin(math.pi * s)
     t = min(1.0, max(0.0, (FIN_Z1 - z) / TIP_ROUND_L))
-    return r - 1.5 * (1.0 - t)
+    return r - 0.8 * (1.0 - t)
 
 
 def fin_center(i, z):
@@ -208,7 +217,7 @@ def check_clearance():
     """Folga angular mínima entre aletas das duas cópias, ao longo da altura."""
     worst = 1e9
     z = FIN_Z0 + 0.5
-    while z < 55.0:
+    while z < SEAT:
         wa = fin_width(z)                 # aleta da peça de baixo
         wb = fin_width(ASSY_H - z)        # aleta da cópia virada, nessa altura
         gap = TAU / (2 * K) - wa / 2.0 - wb / 2.0
@@ -296,14 +305,21 @@ def main():
     shells = build_peca()
     peca = [t for s in shells for t in s]
     bad = sum(check_manifold(s) for s in shells)
-    vol = sum(volume(s) for s in shells)
+    vol_base = volume(shells[0])
+    vol_fins = sum(volume(s) for s in shells[1:])
+    vol = vol_base + vol_fins
     gap = check_clearance()
-    print("peca: %d tris, volume %.1f cm3, arestas ruins %d" % (len(peca), vol / 1000.0, bad))
-    print("folga angular minima entre as copias: %.2f graus (%.2f mm no raio 16)"
-          % (math.degrees(gap), gap * 16.0))
-    assert gap > math.radians(1.0), "folga insuficiente entre as aletas!"
+    print("peca: %d tris, volume %.2f cm3, arestas ruins %d" % (len(peca), vol / 1000.0, bad))
+    print("folga minima entre as copias: %.2f graus (%.2f mm no raio interno)"
+          % (math.degrees(gap), gap * R_IN))
+    assert gap * R_IN > 0.25, "folga insuficiente entre as aletas!"
 
-    write_stl(os.path.join(OUT, "peca_vortice_imprimir_2x.stl"), peca)
+    g_peca = PLA_G_CM3 * (FRAC_BASE * vol_base + FRAC_FIN * vol_fins) / 1000.0
+    print("filamento estimado (PLA): %.1f g por peca, %.1f g nas duas copias"
+          % (g_peca, 2 * g_peca))
+    assert 2 * g_peca <= 6.0, "estouro do limite de 6 g de filamento!"
+
+    write_stl(os.path.join(OUT, "peca_vortice_mini_6g.stl"), peca)
 
     # montagem: virar a copia (rotacao propria, mantem o sentido da helice)
     # e girar 75 graus para intercalar as aletas
@@ -313,13 +329,13 @@ def main():
         x, y = v[0] * cd - v[1] * sd, v[0] * sd + v[1] * cd
         return (x, -y, ASSY_H - v[2])
 
-    roxo, azul = (150, 60, 160), (40, 110, 200)
-    p1 = transform(peca, lambda v: (v[0] - 62, v[1], v[2]))
-    p2 = transform(peca, lambda v: (v[0] - 5, v[1], v[2]))
-    baixo = transform(peca, lambda v: (v[0] + 58, v[1], v[2]))
+    rosa, branca = (240, 110, 165), (225, 222, 218)
+    p1 = transform(peca, lambda v: (v[0] - 30, v[1], v[2]))
+    p2 = transform(peca, lambda v: (v[0] - 3, v[1], v[2]))
+    baixo = transform(peca, lambda v: (v[0] + 27, v[1], v[2]))
     cima = transform([tuple(montada(v) for v in t) for t in peca],
-                     lambda v: (v[0] + 58, v[1], v[2]))
-    render([(p1, roxo), (p2, azul), (baixo, roxo), (cima, azul)],
+                     lambda v: (v[0] + 27, v[1], v[2]))
+    render([(p1, rosa), (p2, branca), (baixo, rosa), (cima, branca)],
            os.path.join(OUT, "preview.png"))
     print("STL e preview gerados em", OUT)
 
